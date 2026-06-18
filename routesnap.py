@@ -86,18 +86,27 @@ def _defs() -> str:
 </defs>"""
 
 
-def _line_badge(x: int, y: int, line_name: str, color: str) -> str:
+def _line_badge(x: int, y: int, line_name: str, color: str, *,
+                cancelled: bool = False) -> str:
     """Render a small pill-shaped line badge (e.g. 'S3', 'U5')."""
     text = _esc(line_name)
     w = max(56, len(text) * 16 + 20)
     r = 14
+    opacity = ' fill-opacity="0.08" stroke-opacity="0.4"' if cancelled else ' fill-opacity="0.18"'
+    strike = ' text-decoration="line-through"' if cancelled else ""
+    text_color = TEXT_MUTED if cancelled else color
     return (
         f'<rect x="{x}" y="{y - r}" width="{w}" height="{r * 2}" rx="{r}" '
-        f'fill="{color}" fill-opacity="0.18" stroke="{color}" stroke-width="1.5"/>'
-        f'<text x="{x + w // 2}" y="{y + 6}" fill="{color}" '
+        f'fill="{color}"{opacity} stroke="{color}" stroke-width="1.5"/>'
+        f'<text x="{x + w // 2}" y="{y + 6}" fill="{text_color}"{strike} '
         f'font-family="Inter,SF Pro,Segoe UI,sans-serif" font-size="18" '
         f'font-weight="700" text-anchor="middle" letter-spacing="0.5">{text}</text>'
     )
+
+
+def _time_status_x(label_x: int, time_str: str) -> int:
+    """X position for delay / status text beside the departure time."""
+    return label_x + len(time_str) * 11 + 20 if time_str else label_x
 
 
 def _node_circle(cx: int, cy: int, filled: bool, color: str = TEXT_PRI, r: int = 10) -> str:
@@ -220,10 +229,24 @@ def _walk_minutes(journey: dict) -> int:
 
 # ── Main renderer ──────────────────────────────────────────────────────────
 
+# ── Layout rhythm (8 px grid) ───────────────────────────────────────────────
+
+MARGIN          = 40    # outer canvas margin
+PAD             = 40    # inner card / content padding
+GAP_LINE        = 36    # baseline gap between header text lines
+GAP_SECTION     = 56    # between major sections (header ↔ graph ↔ remarks)
+GAP_ITEM        = 28    # between list items (remarks, footer)
+GAP_NODE_EDGE   = 20    # node centre → edge line start
+NODE_TEXT_DEPTH = 40    # node centre → bottom of label block
+
+HEADER_TITLE_SZ = 38
+HEADER_SUB_SZ   = 24
+HEADER_TIME_SZ  = 26
+
 CANVAS_W = 1080
-NODE_SPACING = 130          # vertical spacing between nodes
+NODE_SPACING = 140          # vertical spacing between nodes
 GRAPH_X = 120               # x-position of the main graph rail
-BRANCH_OFFSET = 200         # horizontal offset for alternative branch
+BRANCH_OFFSET = 460         # horizontal offset for alternative branch
 LABEL_X = GRAPH_X + 36      # text starts right of the node dot
 BRANCH_LABEL_X = GRAPH_X + BRANCH_OFFSET + 36
 
@@ -287,7 +310,7 @@ class RouteSnapRenderer:
 
                 # Alternative branch (drawn next to the first option, no connecting curve)
                 self.y = split_y
-                branch_x = GRAPH_X + 460
+                branch_x = GRAPH_X + BRANCH_OFFSET
                 branch_label_x = branch_x + 36
 
                 branch_b = nodes_b[split:]
@@ -302,16 +325,16 @@ class RouteSnapRenderer:
         self._draw_remarks(journeys)
 
         # -- footer line --
-        self.y += 30
+        self.y += GAP_SECTION
         self.parts.append(
-            f'<line x1="80" y1="{self.y}" x2="{CANVAS_W - 80}" y2="{self.y}" '
+            f'<line x1="{MARGIN}" y1="{self.y}" x2="{CANVAS_W - MARGIN}" y2="{self.y}" '
             f'stroke="{TEXT_MUTED}" stroke-width="1" stroke-opacity="0.3"/>')
-        self.y += 40
+        self.y += GAP_ITEM
         self.parts.append(
             f'<text x="{CANVAS_W // 2}" y="{self.y}" fill="{TEXT_MUTED}" '
             f'{FONT} font-size="16" text-anchor="middle" letter-spacing="2">'
             f'ROUTESNAP</text>')
-        self.y += 50
+        self.y += MARGIN
 
         # Wrap in <svg>
         height = max(self.y, 600)
@@ -333,23 +356,27 @@ class RouteSnapRenderer:
         dep = j1.get("departure", "?")
         arr = j1.get("arrival", "?")
 
-        self.y = 48
+        card_x = MARGIN
+        card_y = MARGIN
+        card_w = CANVAS_W - 2 * MARGIN
+        text_x = MARGIN + PAD
 
-        # Card background
+        # Baselines with equal top/bottom padding inside the card
+        title_y = card_y + PAD + int(HEADER_TITLE_SZ * 0.78)
+        sub_y = title_y + GAP_LINE
+        time_y = sub_y + GAP_LINE
+        card_h = (time_y + int(HEADER_TIME_SZ * 0.35) + PAD) - card_y
+
         self.parts.append(
-            f'<rect x="40" y="32" width="{CANVAS_W - 80}" height="200" '
+            f'<rect x="{card_x}" y="{card_y}" width="{card_w}" height="{card_h}" '
             f'rx="20" fill="url(#header-grad)" filter="url(#shadow-card)" '
             f'stroke="{TEXT_MUTED}" stroke-width="0.5" stroke-opacity="0.3"/>')
 
-        # Title
-        self.y = 88
         self.parts.append(
-            f'<text x="80" y="{self.y}" fill="{TEXT_PRI}" {FONT} '
-            f'font-size="38" font-weight="700" letter-spacing="-0.5">'
+            f'<text x="{text_x}" y="{title_y}" fill="{TEXT_PRI}" {FONT} '
+            f'font-size="{HEADER_TITLE_SZ}" font-weight="700" letter-spacing="-0.5">'
             f'{_esc(self.title)}</text>')
 
-        # Subtitle line 1
-        self.y += 44
         if len(journeys) == 1:
             sub = f"{dur} min · {transfers} Umstiege · {walk} min Fußweg"
         else:
@@ -358,16 +385,14 @@ class RouteSnapRenderer:
             sub = f"{dur} min · 1 Alternative"
             arr = f"{arr} / {arr2}"
         self.parts.append(
-            f'<text x="80" y="{self.y}" fill="{TEXT_SEC}" {FONT} '
-            f'font-size="24">{_esc(sub)}</text>')
+            f'<text x="{text_x}" y="{sub_y}" fill="{TEXT_SEC}" {FONT} '
+            f'font-size="{HEADER_SUB_SZ}">{_esc(sub)}</text>')
 
-        # Subtitle line 2 – times
-        self.y += 36
         self.parts.append(
-            f'<text x="80" y="{self.y}" fill="{ACCENT_CYAN}" {FONT} '
-            f'font-size="26" font-weight="600">{dep} → {arr}</text>')
+            f'<text x="{text_x}" y="{time_y}" fill="{ACCENT_CYAN}" {FONT} '
+            f'font-size="{HEADER_TIME_SZ}" font-weight="600">{dep} → {arr}</text>')
 
-        self.y = 280  # space below the card
+        self.y = card_y + card_h + GAP_SECTION
 
     # ── rail drawing ────────────────────────────────────────────────────
 
@@ -412,13 +437,19 @@ class RouteSnapRenderer:
             # ── station name + time ─────────────────────────────────────
             name = _esc(node["name"])
             time_str = node.get("time", "")
+            leg_cancelled = bool(edge and edge.get("cancelled"))
 
             name_size = 26 if is_terminal else 22
             name_weight = "700" if is_terminal else "500"
-            name_fill = TEXT_PRI if is_terminal else TEXT_SEC
+            if leg_cancelled:
+                name_fill = TEXT_MUTED
+                name_decoration = ' text-decoration="line-through" opacity="0.55"'
+            else:
+                name_fill = TEXT_PRI if is_terminal else TEXT_SEC
+                name_decoration = ""
 
             self.parts.append(
-                f'<text x="{label_x}" y="{self.y + 6}" fill="{name_fill}" '
+                f'<text x="{label_x}" y="{self.y + 6}" fill="{name_fill}"{name_decoration} '
                 f'{FONT} font-size="{name_size}" font-weight="{name_weight}">'
                 f'{name}</text>')
 
@@ -427,72 +458,82 @@ class RouteSnapRenderer:
                     f'<text x="{label_x}" y="{self.y + 30}" fill="{TEXT_MUTED}" '
                     f'{FONT} font-size="18">{time_str}</text>')
 
-            # Show delay/cancelled badge next to time
-            if edge and edge.get("delay") and edge["delay"] not in ("", "pünktlich"):
-                delay_text = _esc(edge["delay"])
-                delay_color = CANCELLED if edge.get("cancelled") else "#FFA040"
-                tx = label_x + len(time_str) * 11 + 20 if time_str else label_x
+            # Delay / punctuality / cancellation beside the time
+            if leg_cancelled:
+                tx = _time_status_x(label_x, time_str)
                 self.parts.append(
-                    f'<text x="{tx}" y="{self.y + 30}" fill="{delay_color}" '
+                    f'<text x="{tx}" y="{self.y + 30}" fill="{CANCELLED}" '
+                    f'{FONT} font-size="16" font-weight="700">FÄLLT AUS</text>')
+            elif edge and edge.get("delay") and edge["delay"] not in ("", "pünktlich"):
+                delay_text = _esc(edge["delay"])
+                tx = _time_status_x(label_x, time_str)
+                self.parts.append(
+                    f'<text x="{tx}" y="{self.y + 30}" fill="#FFA040" '
                     f'{FONT} font-size="18" font-weight="700">{delay_text}</text>')
             elif edge and edge.get("delay") == "pünktlich":
-                tx = label_x + len(time_str) * 11 + 20 if time_str else label_x
+                tx = _time_status_x(label_x, time_str)
                 self.parts.append(
                     f'<text x="{tx}" y="{self.y + 30}" fill="#39FF14" '
                     f'{FONT} font-size="16" font-weight="600" opacity="0.7">'
                     f'pünktlich</text>')
 
-            # Cancelled strike-through overlay
-            if edge and edge.get("cancelled"):
-                self.parts.append(
-                    f'<text x="{label_x}" y="{self.y + 50}" fill="{CANCELLED}" '
-                    f'{FONT} font-size="16" font-weight="700">FÄLLT AUS</text>')
-
             # ── edge segment ────────────────────────────────────────────
             if edge and not (suppress_last_edge and idx == last_idx):
                 self._draw_edge_segment(rail_x, label_x, edge)
+            elif not edge:
+                self.y += NODE_TEXT_DEPTH
 
     def _draw_edge_segment(self, rail_x: int, label_x: int,
                            edge: dict) -> None:
         """Draw the connecting line + edge label between two nodes."""
         is_walk = edge.get("type") == "walk"
+        cancelled = bool(edge.get("cancelled"))
         color = WALK_COLOR if is_walk else get_line_color(edge.get("line", ""))
         dur = edge.get("duration_min") or 0
 
-        seg_start = self.y + 16
+        seg_start = self.y + GAP_NODE_EDGE
         self.y += NODE_SPACING
-        seg_end = self.y - 16
+        seg_end = self.y - GAP_NODE_EDGE
 
-        # The line itself
+        line_attrs = f'stroke="{color}" stroke-width="4" stroke-linecap="round"'
+        if cancelled:
+            line_attrs += ' stroke-opacity="0.35" stroke-dasharray="8 10"'
+        elif is_walk:
+            line_attrs += ' stroke-dasharray="6 8"'
+
         self.parts.append(
-            _edge_line(rail_x, seg_start, rail_x, seg_end, color,
-                       is_walk=is_walk))
+            f'<line x1="{rail_x}" y1="{seg_start}" x2="{rail_x}" y2="{seg_end}" '
+            f'{line_attrs}/>')
 
         # Edge label (midpoint)
         mid_y = (seg_start + seg_end) // 2
+        label_opacity = "0.5" if cancelled else "1"
 
         if is_walk:
+            walk_color = WALK_COLOR if not cancelled else TEXT_MUTED
             self.parts.append(
-                f'<text x="{label_x}" y="{mid_y}" fill="{WALK_COLOR}" '
-                f'{FONT} font-size="18" font-style="italic">'
+                f'<text x="{label_x}" y="{mid_y}" fill="{walk_color}" '
+                f'{FONT} font-size="18" font-style="italic" opacity="{label_opacity}">'
                 f'Fußweg · {dur} min</text>')
         else:
             line_name = edge.get("line", "?")
-            # Line badge
-            self.parts.append(_line_badge(label_x, mid_y - 12, line_name, color))
+            self.parts.append(
+                _line_badge(label_x, mid_y - 12, line_name, color,
+                            cancelled=cancelled))
 
-            # Direction
             direction = edge.get("direction", "")
             if direction:
                 short_dir = _short_name(direction)
+                dir_decoration = ' text-decoration="line-through"' if cancelled else ""
                 self.parts.append(
-                    f'<text x="{label_x}" y="{mid_y + 18}" fill="{TEXT_MUTED}" '
-                    f'{FONT} font-size="16">→ {_esc(short_dir)}</text>')
+                    f'<text x="{label_x}" y="{mid_y + 18}" fill="{TEXT_MUTED}"{dir_decoration} '
+                    f'{FONT} font-size="16" opacity="{label_opacity}">'
+                    f'→ {_esc(short_dir)}</text>')
 
-            # Duration
             self.parts.append(
                 f'<text x="{label_x}" y="{mid_y + 38}" fill="{TEXT_MUTED}" '
-                f'{FONT} font-size="16">{dur} min</text>')
+                f'{FONT} font-size="16" opacity="{label_opacity}">'
+                f'{dur} min</text>')
 
     # ── remarks ─────────────────────────────────────────────────────────
 
@@ -513,18 +554,18 @@ class RouteSnapRenderer:
         if not remarks:
             return
 
-        self.y += 50
+        self.y += GAP_SECTION
         self.parts.append(
-            f'<text x="80" y="{self.y}" fill="{TEXT_SEC}" {FONT} '
+            f'<text x="{MARGIN + PAD}" y="{self.y}" fill="{TEXT_SEC}" {FONT} '
             f'font-size="20" font-weight="700" letter-spacing="1.5">'
             f'HINWEISE</text>')
 
         for r in remarks:
-            self.y += 32
+            self.y += GAP_ITEM
             # Truncate long remarks
             display = _esc(r[:100] + ("…" if len(r) > 100 else ""))
             self.parts.append(
-                f'<text x="100" y="{self.y}" fill="{TEXT_MUTED}" {FONT} '
+                f'<text x="{MARGIN + PAD + 20}" y="{self.y}" fill="{TEXT_MUTED}" {FONT} '
                 f'font-size="17">· {display}</text>')
 
 

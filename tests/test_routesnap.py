@@ -357,6 +357,10 @@ def test_cancelled_route_render(tmp_path, cancelled_route_data):
     assert rc == 0
     assert "<svg" in svg
     assert "FÄLLT AUS" in svg
+    assert 'text-decoration="line-through"' in svg
+    assert "Alexanderplatz" in svg
+    # One cancellation label per cancelled leg, beside the departure time
+    assert svg.count("FÄLLT AUS") == 1
 
 
 def test_empty_journeys(tmp_path, empty_data):
