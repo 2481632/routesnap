@@ -2,7 +2,7 @@
 
 RouteSnap renders public-transport connections in dark-mode SVG image. It takes normalized journey JSON and produces a shareable graphic.
 
-![Example output, Gesundbrunnen to Hahneberg]{examples/route.svg}
+![Example output, Gesundbrunnen to Hahneberg](examples/route.svg)
 
 ## What it does
 
