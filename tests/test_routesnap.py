@@ -256,12 +256,52 @@ def test_rank_journeys_handles_none_duration():
     spec.loader.exec_module(mod)
 
     journeys = [
-        {"duration_min": None, "transfers": 1, "legs": [], "arrival": "16:00"},
-        {"duration_min": 10,   "transfers": 0, "legs": [], "arrival": "15:50"},
+        {
+            "duration_min": None, "transfers": 1, "arrival": "16:00",
+            "legs": [{"origin": "A (Berlin)", "destination": "B (Berlin)", "line": "S1"}],
+        },
+        {
+            "duration_min": 10, "transfers": 0, "arrival": "15:50",
+            "legs": [{"origin": "A (Berlin)", "destination": "C (Berlin)", "line": "U5"}],
+        },
     ]
     ranked = mod._rank_journeys(journeys)
     assert ranked[0]["duration_min"] == 10
     assert ranked[1]["duration_min"] is None
+
+
+def test_rank_journeys_dedupes_same_path():
+    """Later departures on the same route are not treated as alternatives."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("routesnap", str(SCRIPT))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    leg_u3 = {
+        "type": "transit", "line": "U3",
+        "origin": "U Dahlem-Dorf (Berlin)",
+        "destination": "U Fehrbelliner Platz (Berlin)",
+    }
+    leg_walk = {
+        "type": "walk", "line": "walk",
+        "origin": "U Fehrbelliner Platz (Berlin)",
+        "destination": "U Fehrbelliner Platz (Berlin)",
+    }
+    leg_u7 = {
+        "type": "transit", "line": "U7",
+        "origin": "U Fehrbelliner Platz (Berlin)",
+        "destination": "S+U Rathaus Spandau (Berlin)",
+    }
+    legs = [leg_u3, leg_walk, leg_u7]
+
+    journeys = [
+        {"duration_min": 36, "transfers": 1, "arrival": "16:57", "legs": legs},
+        {"duration_min": 36, "transfers": 1, "arrival": "17:02", "legs": legs},
+        {"duration_min": 38, "transfers": 1, "arrival": "17:09", "legs": legs},
+    ]
+    ranked = mod._rank_journeys(journeys)
+    assert len(ranked) == 1
+    assert ranked[0]["arrival"] == "16:57"
 
 
 def test_build_node_list():
@@ -353,6 +393,19 @@ def test_dynamic_canvas_height(tmp_path, single_route_data):
     assert rc == 0
     # Should NOT be the old hardcoded 1920
     assert 'height="1920"' not in svg
+
+
+def test_identical_path_renders_single_route(tmp_path):
+    """Same stops/lines at different times should not show a spurious branch."""
+    bug_path = Path(__file__).resolve().parent.parent / "bug.json"
+    data = json.loads(bug_path.read_text(encoding="utf-8"))
+    rc, svg = _run_render(tmp_path, data, ["--title", "Spandau"])
+    assert rc == 0
+    assert "Alternative" not in svg
+    assert "Dahlem-Dorf" in svg
+    assert "Fehrbelliner" in svg
+    assert "U3" in svg
+    assert "U7" in svg
 
 
 def test_svg_has_glow_filters(tmp_path, single_route_data):
