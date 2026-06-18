@@ -136,8 +136,23 @@ def _curve_branch(x_from: int, y_from: int, x_to: int, y_to: int,
 
 # ── Data helpers ────────────────────────────────────────────────────────────
 
+def _journey_path_signature(journey: dict) -> tuple:
+    """Hashable route identity from station names and lines (ignores times)."""
+    parts: list[str | tuple[str, str]] = []
+    for leg in journey.get("legs", []):
+        parts.append((_short_name(leg.get("origin", "")), leg.get("line", "")))
+    if journey.get("legs"):
+        last = journey["legs"][-1]
+        parts.append(_short_name(last.get("destination", "")))
+    return tuple(parts)
+
+
 def _rank_journeys(journeys: list[dict]) -> list[dict]:
-    """Pick the best two journeys by (duration, transfers, walk, arrival)."""
+    """Pick the best two journeys with distinct paths.
+
+    Journeys that share the same stops and lines (e.g. later departures on
+    the same connection) count as one route, not an alternative.
+    """
     def key(j: dict) -> tuple:
         dur = j.get("duration_min")
         dur = dur if dur is not None else 9999
@@ -147,7 +162,13 @@ def _rank_journeys(journeys: list[dict]) -> list[dict]:
                    for l in j.get("legs", []) if l.get("type") == "walk")
         arr = j.get("arrival") or "23:59"
         return (dur, transfers, walk, arr)
-    return sorted(journeys, key=key)[:2]
+
+    best_by_path: dict[tuple, dict] = {}
+    for j in journeys:
+        sig = _journey_path_signature(j)
+        if sig not in best_by_path or key(j) < key(best_by_path[sig]):
+            best_by_path[sig] = j
+    return sorted(best_by_path.values(), key=key)[:2]
 
 
 def _build_node_list(legs: list[dict]) -> list[dict]:
@@ -171,8 +192,11 @@ def _build_node_list(legs: list[dict]) -> list[dict]:
 
 
 def _find_split_index(nodes_a: list[dict], nodes_b: list[dict]) -> int:
-    """Find the last shared node index (where the branch splits)."""
-    split = 0
+    """Find the last shared node index (where the branch splits).
+
+    Returns -1 when both node lists describe the same path end-to-end.
+    """
+    split = -1
     for i in range(min(len(nodes_a), len(nodes_b))):
         if nodes_a[i]["name"] != nodes_b[i]["name"]:
             break
@@ -183,6 +207,9 @@ def _find_split_index(nodes_a: list[dict], nodes_b: list[dict]) -> int:
             break
         if ea.get("line") != eb.get("line"):
             break
+    # Same path all the way – no meaningful branch point.
+    if split >= len(nodes_a) - 1 and split >= len(nodes_b) - 1:
+        return -1
     return split
 
 
@@ -239,34 +266,37 @@ class RouteSnapRenderer:
             nodes_b = _build_node_list(journeys[1]["legs"])
             split = _find_split_index(nodes_a, nodes_b)
 
-            # Shared trunk – draw nodes up to & including split, but
-            # suppress the last node's outgoing edge (that belongs to
-            # the individual branches).
-            trunk = nodes_a[: split + 1]
-            self._draw_rail(trunk, GRAPH_X, LABEL_X, suppress_last_edge=True)
+            if split < 0:
+                self._draw_rail(nodes_a, GRAPH_X, LABEL_X)
+            else:
+                # Shared trunk – draw nodes up to & including split, but
+                # suppress the last node's outgoing edge (that belongs to
+                # the individual branches).
+                trunk = nodes_a[: split + 1]
+                self._draw_rail(trunk, GRAPH_X, LABEL_X, suppress_last_edge=True)
 
-            # Remember Y of the split point
-            split_y = self.y
+                # Remember Y of the split point
+                split_y = self.y
 
-            # Main branch (continues straight down on the left rail).
-            # skip_first=True → don't redraw the split node, but DO
-            # draw its outgoing edge.
-            branch_a = nodes_a[split:]
-            self._draw_rail(branch_a, GRAPH_X, LABEL_X, skip_first=True)
-            end_y_a = self.y
+                # Main branch (continues straight down on the left rail).
+                # skip_first=True → don't redraw the split node, but DO
+                # draw its outgoing edge.
+                branch_a = nodes_a[split:]
+                self._draw_rail(branch_a, GRAPH_X, LABEL_X, skip_first=True)
+                end_y_a = self.y
 
-            # Alternative branch (drawn next to the first option, no connecting curve)
-            self.y = split_y
-            branch_x = GRAPH_X + 460
-            branch_label_x = branch_x + 36
+                # Alternative branch (drawn next to the first option, no connecting curve)
+                self.y = split_y
+                branch_x = GRAPH_X + 460
+                branch_label_x = branch_x + 36
 
-            branch_b = nodes_b[split:]
-            # We set skip_first=False so that the alternative branch draws
-            # the split node again on its side, providing a clear starting point.
-            self._draw_rail(branch_b, branch_x, branch_label_x, skip_first=False)
-            end_y_b = self.y
+                branch_b = nodes_b[split:]
+                # We set skip_first=False so that the alternative branch draws
+                # the split node again on its side, providing a clear starting point.
+                self._draw_rail(branch_b, branch_x, branch_label_x, skip_first=False)
+                end_y_b = self.y
 
-            self.y = max(end_y_a, end_y_b)
+                self.y = max(end_y_a, end_y_b)
 
         # -- remarks --
         self._draw_remarks(journeys)
